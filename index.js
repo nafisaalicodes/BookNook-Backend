@@ -437,3 +437,74 @@ app.post('/borrows', verifyToken, async (req, res) => {
     await session.endSession()
   }
 })
+
+app.get('/borrows', verifyToken, async (req, res) => {
+  try {
+    const { email } = req.query
+
+    if (!email) {
+      return res.status(400).json({
+        message: 'User email is required',
+      })
+    }
+
+    const result = await borrows()
+      .find({ userEmail: email })
+      .sort({ borrowedAt: -1 })
+      .toArray()
+
+    res.json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+app.delete('/borrows/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    if (!isValidId(id)) {
+      return res.status(400).json({
+        message: 'Invalid borrow ID',
+      })
+    }
+
+    const borrowRecord = await borrows().findOne({
+      _id: new ObjectId(id),
+    })
+
+    if (!borrowRecord) {
+      return res.status(404).json({
+        message: 'Borrow record not found',
+      })
+    }
+
+    const bookObjectId = isValidId(borrowRecord.bookId)
+      ? new ObjectId(borrowRecord.bookId)
+      : null
+
+    if (bookObjectId) {
+      const updateResult = await books().updateOne(
+        { _id: bookObjectId },
+        { $inc: { availableCopies: 1 } }
+      )
+
+      if (updateResult.matchedCount === 0) {
+        return res.status(409).json({
+          message:
+            'The original book no longer exists. Borrow record was not removed.',
+        })
+      }
+    }
+
+    await borrows().deleteOne({
+      _id: new ObjectId(id),
+    })
+
+    res.json({
+      message: 'Book returned successfully',
+    })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
