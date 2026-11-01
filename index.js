@@ -27,6 +27,13 @@ if (!uri) {
 const client = new MongoClient(uri)
 let db
 
+const JWT_SECRET = process.env.JWT_SECRET
+
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is missing from the .env file')
+}
+
+// Database connection
 async function connectDB() {
   try {
     await client.connect()
@@ -35,9 +42,16 @@ async function connectDB() {
 
     await db.command({ ping: 1 })
 
-    console.log(' Connected to MongoDB Atlas successfully!')
+    // Prevent duplicate active borrows of the same book
+    // by the same user.
+    await borrows().createIndex(
+      { bookId: 1, userEmail: 1 },
+      { unique: true, name: 'unique_book_user_borrow' }
+    )
+
+    console.log('Connected to MongoDB Atlas successfully!')
   } catch (error) {
-    console.error(' MongoDB connection error:', error.message)
+    console.error('MongoDB connection error:', error.message)
     process.exit(1)
   }
 }
@@ -51,49 +65,103 @@ function borrows() {
 }
 
 function isValidId(id) {
-  return ObjectId.isValid(id) && String(new ObjectId(id)) === id
+  return (
+    typeof id === 'string' &&
+    ObjectId.isValid(id) &&
+    String(new ObjectId(id)) === id
+  )
 }
 
 function handleError(res, error) {
   console.error(error)
+
   return res.status(500).json({
     message: 'Internal server error',
   })
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'booknook-jwt-secret'
-
+// JWT verification middleware
 function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Unauthorized: No token provided' })
+    return res.status(401).json({
+      message: 'Unauthorized: No token provided',
+    })
   }
+
   const token = authHeader.split(' ')[1]
+
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
+
+    if (
+      typeof decoded === 'string' ||
+      !decoded.email ||
+      typeof decoded.email !== 'string'
+    ) {
+      return res.status(403).json({
+        message: 'Forbidden: Invalid token payload',
+      })
+    }
+
     req.user = decoded
+
     next()
   } catch {
-    return res.status(403).json({ message: 'Forbidden: Invalid or expired token' })
+    return res.status(403).json({
+      message: 'Forbidden: Invalid or expired token',
+    })
   }
 }
 
+// Check that the request belongs to the authenticated user.
+function verifyUserEmail(req, res, email) {
+  if (
+    typeof email !== 'string' ||
+    email.trim().toLowerCase() !==
+      req.user.email.trim().toLowerCase()
+  ) {
+    res.status(403).json({
+      message: 'You can only access your own account data',
+    })
+
+    return false
+  }
+
+  return true
+}
+
+// Health check
 app.get('/', (req, res) => {
   res.json({
-    message: ' BookNook API is running!',
+    message: 'BookNook API is running!',
     status: 'OK',
   })
 })
 
+// JWT endpoint
+// IMPORTANT: This endpoint alone does not authenticate a real user.
+// Connect it to your actual authentication provider before production.
 app.post('/jwt', (req, res) => {
   const { email } = req.body
-  if (!email) {
-    return res.status(400).json({ message: 'Email is required' })
+
+  if (typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({
+      message: 'Email is required',
+    })
   }
-  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '7d' })
+
+  const token = jwt.sign(
+    { email: email.trim().toLowerCase() },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  )
+
   res.json({ token })
 })
 
+// Get all books
 app.get('/books', async (req, res) => {
   try {
     const { sort, limit } = req.query
@@ -118,6 +186,7 @@ app.get('/books', async (req, res) => {
   }
 })
 
+// Get a single book
 app.get('/books/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -144,6 +213,7 @@ app.get('/books/:id', async (req, res) => {
   }
 })
 
+// Add a book
 app.post('/books', async (req, res) => {
   try {
     const {
@@ -206,6 +276,7 @@ app.post('/books', async (req, res) => {
   }
 })
 
+// Update a book
 app.patch('/books/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -239,6 +310,8 @@ app.patch('/books/:id', async (req, res) => {
       })
     }
 
+    const bookId = new ObjectId(id)
+
     if (updates.totalCopies !== undefined) {
       const total = Number(updates.totalCopies)
 
@@ -249,7 +322,7 @@ app.patch('/books/:id', async (req, res) => {
       }
 
       const existingBook = await books().findOne({
-        _id: new ObjectId(id),
+        _id: bookId,
       })
 
       if (!existingBook) {
@@ -259,8 +332,8 @@ app.patch('/books/:id', async (req, res) => {
       }
 
       const borrowedCopies =
-        (existingBook.totalCopies || 0) -
-        (existingBook.availableCopies || 0)
+        (existingBook.totalCopies ?? 0) -
+        (existingBook.availableCopies ?? 0)
 
       if (total < borrowedCopies) {
         return res.status(400).json({
@@ -273,7 +346,7 @@ app.patch('/books/:id', async (req, res) => {
     }
 
     const result = await books().updateOne(
-      { _id: new ObjectId(id) },
+      { _id: bookId },
       { $set: updates }
     )
 
@@ -284,7 +357,7 @@ app.patch('/books/:id', async (req, res) => {
     }
 
     const updatedBook = await books().findOne({
-      _id: new ObjectId(id),
+      _id: bookId,
     })
 
     res.json({
@@ -296,6 +369,7 @@ app.patch('/books/:id', async (req, res) => {
   }
 })
 
+// Delete a book
 app.delete('/books/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -306,8 +380,10 @@ app.delete('/books/:id', async (req, res) => {
       })
     }
 
+    const bookId = new ObjectId(id)
+
     const book = await books().findOne({
-      _id: new ObjectId(id),
+      _id: bookId,
     })
 
     if (!book) {
@@ -327,7 +403,7 @@ app.delete('/books/:id', async (req, res) => {
     }
 
     await books().deleteOne({
-      _id: new ObjectId(id),
+      _id: bookId,
     })
 
     res.json({
@@ -338,6 +414,7 @@ app.delete('/books/:id', async (req, res) => {
   }
 })
 
+// Borrow a book
 app.post('/borrows', verifyToken, async (req, res) => {
   const session = client.startSession()
 
@@ -348,6 +425,11 @@ app.post('/borrows', verifyToken, async (req, res) => {
       return res.status(400).json({
         message: 'Book ID and user email are required',
       })
+    }
+
+    // Ensure that the request email matches the JWT email.
+    if (!verifyUserEmail(req, res, userEmail)) {
+      return
     }
 
     if (!returnDate) {
@@ -362,82 +444,101 @@ app.post('/borrows', verifyToken, async (req, res) => {
       })
     }
 
-    const existingBorrow = await borrows().findOne({
-      bookId,
-      userEmail,
+    const parsedReturnDate = new Date(returnDate)
+
+    if (Number.isNaN(parsedReturnDate.getTime())) {
+      return res.status(400).json({
+        message: 'Invalid return date',
+      })
+    }
+
+    const bookObjectId = new ObjectId(bookId)
+    let borrowRecord
+
+    await session.withTransaction(async () => {
+      const existingBorrow = await borrows().findOne(
+        { bookId, userEmail: req.user.email },
+        { session }
+      )
+
+      if (existingBorrow) {
+        const error = new Error('You have already borrowed this book')
+        error.statusCode = 409
+        throw error
+      }
+
+      const book = await books().findOneAndUpdate(
+        {
+          _id: bookObjectId,
+          availableCopies: { $gt: 0 },
+        },
+        {
+          $inc: { availableCopies: -1 },
+        },
+        {
+          returnDocument: 'after',
+          session,
+        }
+      )
+
+      if (!book) {
+        const existingBook = await books().findOne(
+          { _id: bookObjectId },
+          { session }
+        )
+
+        if (!existingBook) {
+          const error = new Error('Book not found')
+          error.statusCode = 404
+          throw error
+        }
+
+        const error = new Error('No copies available for borrowing')
+        error.statusCode = 400
+        throw error
+      }
+
+      borrowRecord = {
+        bookId,
+        bookTitle: book.title,
+        bookImage: book.image || '',
+        userEmail: req.user.email,
+        userName: userName || '',
+        borrowedAt: new Date(),
+        returnDate: parsedReturnDate,
+      }
+
+      const result = await borrows().insertOne(borrowRecord, {
+        session,
+      })
+
+      borrowRecord._id = result.insertedId
     })
 
-    if (existingBorrow) {
+    res.status(201).json({
+      message: 'Book borrowed successfully',
+      borrow: borrowRecord,
+    })
+  } catch (error) {
+    if (error.code === 11000) {
       return res.status(409).json({
         message: 'You have already borrowed this book',
       })
     }
 
-    const book = await books().findOneAndUpdate(
-      {
-        _id: new ObjectId(bookId),
-        availableCopies: { $gt: 0 },
-      },
-      {
-        $inc: { availableCopies: -1 },
-      },
-      {
-        returnDocument: 'after',
-      }
-    )
-
-    if (!book) {
-      const existingBook = await books().findOne({
-        _id: new ObjectId(bookId),
-      })
-
-      if (!existingBook) {
-        return res.status(404).json({
-          message: 'Book not found',
-        })
-      }
-
-      return res.status(400).json({
-        message: 'No copies available for borrowing',
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        message: error.message,
       })
     }
 
-    const borrowRecord = {
-      bookId,
-      bookTitle: book.title,
-      bookImage: book.image || '',
-      userEmail,
-      userName: userName || '',
-      borrowedAt: new Date(),
-      returnDate: new Date(returnDate),
-    }
-
-    try {
-      const result = await borrows().insertOne(borrowRecord)
-
-      return res.status(201).json({
-        message: 'Book borrowed successfully',
-        borrow: {
-          ...borrowRecord,
-          _id: result.insertedId,
-        },
-      })
-    } catch (insertError) {
-      
-      await books().updateOne(
-        { _id: new ObjectId(bookId) },
-        { $inc: { availableCopies: 1 } }
-      )
-
-      throw insertError
-    }
-  } catch (error) {
     handleError(res, error)
   } finally {
     await session.endSession()
   }
 })
 
+// Get borrow records for the authenticated user
 app.get('/borrows', verifyToken, async (req, res) => {
   try {
     const { email } = req.query
@@ -448,8 +549,12 @@ app.get('/borrows', verifyToken, async (req, res) => {
       })
     }
 
+    if (!verifyUserEmail(req, res, email)) {
+      return
+    }
+
     const result = await borrows()
-      .find({ userEmail: email })
+      .find({ userEmail: req.user.email })
       .sort({ borrowedAt: -1 })
       .toArray()
 
@@ -459,7 +564,10 @@ app.get('/borrows', verifyToken, async (req, res) => {
   }
 })
 
+// Return a book
 app.delete('/borrows/:id', verifyToken, async (req, res) => {
+  const session = client.startSession()
+
   try {
     const { id } = req.params
 
@@ -469,46 +577,93 @@ app.delete('/borrows/:id', verifyToken, async (req, res) => {
       })
     }
 
-    const borrowRecord = await borrows().findOne({
-      _id: new ObjectId(id),
-    })
+    const borrowId = new ObjectId(id)
 
-    if (!borrowRecord) {
-      return res.status(404).json({
-        message: 'Borrow record not found',
-      })
-    }
+    await session.withTransaction(async () => {
+      // Find only a borrow record owned by the authenticated user.
+      const borrowRecord = await borrows().findOne(
+        {
+          _id: borrowId,
+          userEmail: req.user.email,
+        },
+        { session }
+      )
 
-    const bookObjectId = isValidId(borrowRecord.bookId)
-      ? new ObjectId(borrowRecord.bookId)
-      : null
+      if (!borrowRecord) {
+        const error = new Error(
+          'Borrow record not found for your account'
+        )
+        error.statusCode = 404
+        throw error
+      }
 
-    if (bookObjectId) {
+      if (!isValidId(borrowRecord.bookId)) {
+        const error = new Error(
+          'The original book ID is invalid. Borrow record was not removed.'
+        )
+        error.statusCode = 409
+        throw error
+      }
+
+      const bookObjectId = new ObjectId(borrowRecord.bookId)
+
+      // Do not increase copies beyond the book's total copies.
       const updateResult = await books().updateOne(
-        { _id: bookObjectId },
-        { $inc: { availableCopies: 1 } }
+        {
+          _id: bookObjectId,
+          $expr: {
+            $lt: ['$availableCopies', '$totalCopies'],
+          },
+        },
+        {
+          $inc: { availableCopies: 1 },
+        },
+        { session }
       )
 
       if (updateResult.matchedCount === 0) {
-        return res.status(409).json({
-          message:
-            'The original book no longer exists. Borrow record was not removed.',
-        })
+        const error = new Error(
+          'The original book is missing or its copy count is inconsistent.'
+        )
+        error.statusCode = 409
+        throw error
       }
-    }
 
-    await borrows().deleteOne({
-      _id: new ObjectId(id),
+      // Delete only this user's borrow record.
+      const deleteResult = await borrows().deleteOne(
+        {
+          _id: borrowId,
+          userEmail: req.user.email,
+        },
+        { session }
+      )
+
+      if (deleteResult.deletedCount !== 1) {
+        const error = new Error(
+          'Borrow record could not be returned. Please try again.'
+        )
+        error.statusCode = 409
+        throw error
+      }
     })
 
     res.json({
       message: 'Book returned successfully',
     })
   } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        message: error.message,
+      })
+    }
+
     handleError(res, error)
+  } finally {
+    await session.endSession()
   }
 })
 
+// Get books added by the authenticated user
 app.get('/my-books', verifyToken, async (req, res) => {
   try {
     const { email } = req.query
@@ -519,8 +674,12 @@ app.get('/my-books', verifyToken, async (req, res) => {
       })
     }
 
+    if (!verifyUserEmail(req, res, email)) {
+      return
+    }
+
     const result = await books()
-      .find({ userEmail: email })
+      .find({ userEmail: req.user.email })
       .sort({ _id: -1 })
       .toArray()
 
@@ -530,14 +689,16 @@ app.get('/my-books', verifyToken, async (req, res) => {
   }
 })
 
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     message: 'Route not found',
   })
 })
 
+// Start server after connecting to the database and creating the index.
 connectDB().then(() => {
   app.listen(port, () => {
-    console.log(` BookNook server running on port ${port}`)
+    console.log(`BookNook server running on port ${port}`)
   })
 })
