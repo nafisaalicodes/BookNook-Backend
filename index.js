@@ -117,3 +117,91 @@ app.get('/books', async (req, res) => {
     handleError(res, error)
   }
 })
+
+app.get('/books/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    if (!isValidId(id)) {
+      return res.status(400).json({
+        message: 'Invalid book ID',
+      })
+    }
+
+    const book = await books().findOne({
+      _id: new ObjectId(id),
+    })
+
+    if (!book) {
+      return res.status(404).json({
+        message: 'Book not found',
+      })
+    }
+
+    res.json(book)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+app.post('/books', async (req, res) => {
+  try {
+    const {
+      title,
+      author,
+      category,
+      image,
+      description,
+      userName,
+      userEmail,
+      totalCopies,
+    } = req.body
+
+    if (
+      !title ||
+      !author ||
+      !category ||
+      !description ||
+      !userEmail
+    ) {
+      return res.status(400).json({
+        message:
+          'Title, author, category, description, and user email are required',
+      })
+    }
+
+    const copies = Number(totalCopies ?? 1)
+
+    if (!Number.isInteger(copies) || copies < 1) {
+      return res.status(400).json({
+        message: 'Total copies must be a positive integer',
+      })
+    }
+
+    const newBook = {
+      title,
+      author,
+      category,
+      image: image || '',
+      description,
+      userName: userName || '',
+      userEmail,
+      totalCopies: copies,
+      availableCopies: copies,
+      createdAt: new Date(),
+    }
+
+    const result = await books().insertOne(newBook)
+
+    res.status(201).json({
+      message: 'Book added successfully',
+      insertedId: result.insertedId,
+      book: {
+        ...newBook,
+        _id: result.insertedId,
+      },
+    })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
