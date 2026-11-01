@@ -205,3 +205,93 @@ app.post('/books', async (req, res) => {
     handleError(res, error)
   }
 })
+
+app.patch('/books/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    if (!isValidId(id)) {
+      return res.status(400).json({
+        message: 'Invalid book ID',
+      })
+    }
+
+    const allowedFields = [
+      'title',
+      'author',
+      'category',
+      'image',
+      'description',
+      'totalCopies',
+    ]
+
+    const updates = {}
+
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field]
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        message: 'No valid fields provided for update',
+      })
+    }
+
+    if (updates.totalCopies !== undefined) {
+      const total = Number(updates.totalCopies)
+
+      if (!Number.isInteger(total) || total < 1) {
+        return res.status(400).json({
+          message: 'Total copies must be a positive integer',
+        })
+      }
+
+      const existingBook = await books().findOne({
+        _id: new ObjectId(id),
+      })
+
+      if (!existingBook) {
+        return res.status(404).json({
+          message: 'Book not found',
+        })
+      }
+
+      const borrowedCopies =
+        (existingBook.totalCopies || 0) -
+        (existingBook.availableCopies || 0)
+
+      if (total < borrowedCopies) {
+        return res.status(400).json({
+          message: 'Total copies cannot be less than borrowed copies',
+        })
+      }
+
+      updates.totalCopies = total
+      updates.availableCopies = total - borrowedCopies
+    }
+
+    const result = await books().updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updates }
+    )
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        message: 'Book not found',
+      })
+    }
+
+    const updatedBook = await books().findOne({
+      _id: new ObjectId(id),
+    })
+
+    res.json({
+      message: 'Book updated successfully',
+      book: updatedBook,
+    })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
