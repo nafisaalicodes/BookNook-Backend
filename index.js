@@ -84,3 +84,36 @@ app.get('/', (req, res) => {
     status: 'OK',
   })
 })
+
+app.post('/jwt', (req, res) => {
+  const { email } = req.body
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required' })
+  }
+  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '7d' })
+  res.json({ token })
+})
+
+app.get('/books', async (req, res) => {
+  try {
+    const { sort, limit } = req.query
+
+    let query = books().find({})
+
+    if (sort === 'newest') {
+      query = query.sort({ createdAt: -1 })
+    }
+
+    const parsedLimit = Number.parseInt(limit, 10)
+
+    if (Number.isInteger(parsedLimit) && parsedLimit > 0) {
+      query = query.limit(parsedLimit)
+    }
+
+    const result = await query.toArray()
+
+    res.json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
