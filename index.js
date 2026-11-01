@@ -41,3 +41,22 @@ async function connectDB() {
     process.exit(1)
   }
 }
+
+function books() {
+  return db.collection('books')
+}
+
+function borrows() {
+  return db.collection('borrows')
+}
+
+function isValidId(id) {
+  return ObjectId.isValid(id) && String(new ObjectId(id)) === id
+}
+
+function handleError(res, error) {
+  console.error(error)
+  return res.status(500).json({
+    message: 'Internal server error',
+  })
+}
