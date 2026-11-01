@@ -508,3 +508,36 @@ app.delete('/borrows/:id', verifyToken, async (req, res) => {
     handleError(res, error)
   }
 })
+
+app.get('/my-books', verifyToken, async (req, res) => {
+  try {
+    const { email } = req.query
+
+    if (!email) {
+      return res.status(400).json({
+        message: 'User email is required',
+      })
+    }
+
+    const result = await books()
+      .find({ userEmail: email })
+      .sort({ _id: -1 })
+      .toArray()
+
+    res.json(result)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+app.use((req, res) => {
+  res.status(404).json({
+    message: 'Route not found',
+  })
+})
+
+connectDB().then(() => {
+  app.listen(port, () => {
+    console.log(` BookNook server running on port ${port}`)
+  })
+})
