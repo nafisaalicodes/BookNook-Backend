@@ -295,3 +295,45 @@ app.patch('/books/:id', async (req, res) => {
     handleError(res, error)
   }
 })
+
+app.delete('/books/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    if (!isValidId(id)) {
+      return res.status(400).json({
+        message: 'Invalid book ID',
+      })
+    }
+
+    const book = await books().findOne({
+      _id: new ObjectId(id),
+    })
+
+    if (!book) {
+      return res.status(404).json({
+        message: 'Book not found',
+      })
+    }
+
+    const activeBorrows = await borrows().countDocuments({
+      bookId: id,
+    })
+
+    if (activeBorrows > 0) {
+      return res.status(409).json({
+        message: 'Cannot delete a book while it has active borrows',
+      })
+    }
+
+    await books().deleteOne({
+      _id: new ObjectId(id),
+    })
+
+    res.json({
+      message: 'Book deleted successfully',
+    })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
