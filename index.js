@@ -337,3 +337,103 @@ app.delete('/books/:id', async (req, res) => {
     handleError(res, error)
   }
 })
+
+app.post('/borrows', verifyToken, async (req, res) => {
+  const session = client.startSession()
+
+  try {
+    const { bookId, userEmail, userName, returnDate } = req.body
+
+    if (!bookId || !userEmail) {
+      return res.status(400).json({
+        message: 'Book ID and user email are required',
+      })
+    }
+
+    if (!returnDate) {
+      return res.status(400).json({
+        message: 'Return date is required',
+      })
+    }
+
+    if (!isValidId(bookId)) {
+      return res.status(400).json({
+        message: 'Invalid book ID',
+      })
+    }
+
+    const existingBorrow = await borrows().findOne({
+      bookId,
+      userEmail,
+    })
+
+    if (existingBorrow) {
+      return res.status(409).json({
+        message: 'You have already borrowed this book',
+      })
+    }
+
+    const book = await books().findOneAndUpdate(
+      {
+        _id: new ObjectId(bookId),
+        availableCopies: { $gt: 0 },
+      },
+      {
+        $inc: { availableCopies: -1 },
+      },
+      {
+        returnDocument: 'after',
+      }
+    )
+
+    if (!book) {
+      const existingBook = await books().findOne({
+        _id: new ObjectId(bookId),
+      })
+
+      if (!existingBook) {
+        return res.status(404).json({
+          message: 'Book not found',
+        })
+      }
+
+      return res.status(400).json({
+        message: 'No copies available for borrowing',
+      })
+    }
+
+    const borrowRecord = {
+      bookId,
+      bookTitle: book.title,
+      bookImage: book.image || '',
+      userEmail,
+      userName: userName || '',
+      borrowedAt: new Date(),
+      returnDate: new Date(returnDate),
+    }
+
+    try {
+      const result = await borrows().insertOne(borrowRecord)
+
+      return res.status(201).json({
+        message: 'Book borrowed successfully',
+        borrow: {
+          ...borrowRecord,
+          _id: result.insertedId,
+        },
+      })
+    } catch (insertError) {
+      
+      await books().updateOne(
+        { _id: new ObjectId(bookId) },
+        { $inc: { availableCopies: 1 } }
+      )
+
+      throw insertError
+    }
+  } catch (error) {
+    handleError(res, error)
+  } finally {
+    await session.endSession()
+  }
+})
