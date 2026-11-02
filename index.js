@@ -37,7 +37,6 @@ if (!JWT_SECRET) {
   throw new Error('JWT_SECRET is missing from the .env file')
 }
 
-// Database connection
 async function connectDB() {
   try {
     await client.connect()
@@ -100,7 +99,6 @@ function handleError(res, error) {
   })
 }
 
-// JWT verification middleware
 function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization
 
@@ -135,7 +133,6 @@ function verifyToken(req, res, next) {
   }
 }
 
-// Check that the request belongs to the authenticated user.
 function verifyUserEmail(req, res, email) {
   if (
     typeof email !== 'string' ||
@@ -152,7 +149,6 @@ function verifyUserEmail(req, res, email) {
   return true
 }
 
-// Health check
 app.get('/', (req, res) => {
   res.json({
     message: 'BookNook API is running!',
@@ -160,10 +156,6 @@ app.get('/', (req, res) => {
   })
 })
 
-// JWT endpoint
-// IMPORTANT: This endpoint alone does not authenticate a real user.
-// Connect it to your actual authentication provider before production.
-// Generate JWT after verifying Better Auth session
 app.post('/jwt', async (req, res) => {
   try {
     const session = await backendAuth.api.getSession({
@@ -197,7 +189,6 @@ app.post('/jwt', async (req, res) => {
   }
 })
 
-// Get all books
 app.get('/books', async (req, res) => {
   try {
     const { sort, limit } = req.query
@@ -222,7 +213,6 @@ app.get('/books', async (req, res) => {
   }
 })
 
-// Get a single book
 app.get('/books/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -249,7 +239,6 @@ app.get('/books/:id', async (req, res) => {
   }
 })
 
-// Add a book
 app.post('/books', async (req, res) => {
   try {
     const {
@@ -312,7 +301,6 @@ app.post('/books', async (req, res) => {
   }
 })
 
-// Update a book
 app.patch('/books/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -405,7 +393,6 @@ app.patch('/books/:id', async (req, res) => {
   }
 })
 
-// Delete a book
 app.delete('/books/:id', async (req, res) => {
   try {
     const { id } = req.params
@@ -450,7 +437,6 @@ app.delete('/books/:id', async (req, res) => {
   }
 })
 
-// Borrow a book
 app.post('/borrows', verifyToken, async (req, res) => {
   const session = client.startSession()
 
@@ -463,7 +449,6 @@ app.post('/borrows', verifyToken, async (req, res) => {
       })
     }
 
-    // Ensure that the request email matches the JWT email.
     if (!verifyUserEmail(req, res, userEmail)) {
       return
     }
@@ -574,7 +559,6 @@ app.post('/borrows', verifyToken, async (req, res) => {
   }
 })
 
-// Get borrow records for the authenticated user
 app.get('/borrows', verifyToken, async (req, res) => {
   try {
     const { email } = req.query
@@ -600,7 +584,6 @@ app.get('/borrows', verifyToken, async (req, res) => {
   }
 })
 
-// Return a book
 app.delete('/borrows/:id', verifyToken, async (req, res) => {
   const session = client.startSession()
 
@@ -616,7 +599,7 @@ app.delete('/borrows/:id', verifyToken, async (req, res) => {
     const borrowId = new ObjectId(id)
 
     await session.withTransaction(async () => {
-      // Find only a borrow record owned by the authenticated user.
+   
       const borrowRecord = await borrows().findOne(
         {
           _id: borrowId,
@@ -643,7 +626,6 @@ app.delete('/borrows/:id', verifyToken, async (req, res) => {
 
       const bookObjectId = new ObjectId(borrowRecord.bookId)
 
-      // Do not increase copies beyond the book's total copies.
       const updateResult = await books().updateOne(
         {
           _id: bookObjectId,
@@ -665,7 +647,6 @@ app.delete('/borrows/:id', verifyToken, async (req, res) => {
         throw error
       }
 
-      // Delete only this user's borrow record.
       const deleteResult = await borrows().deleteOne(
         {
           _id: borrowId,
@@ -699,7 +680,6 @@ app.delete('/borrows/:id', verifyToken, async (req, res) => {
   }
 })
 
-// Get books added by the authenticated user
 app.get('/my-books', verifyToken, async (req, res) => {
   try {
     const { email } = req.query
@@ -725,14 +705,12 @@ app.get('/my-books', verifyToken, async (req, res) => {
   }
 })
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     message: 'Route not found',
   })
 })
 
-// Start server after connecting to the database and creating the index.
 connectDB().then(() => {
   app.listen(port, () => {
     console.log(`BookNook server running on port ${port}`)
