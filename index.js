@@ -3,6 +3,9 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import { MongoClient, ObjectId } from 'mongodb'
 import jwt from 'jsonwebtoken'
+import { betterAuth } from 'better-auth'
+import { mongodbAdapter } from 'better-auth/adapters/mongodb'
+import { fromNodeHeaders } from 'better-auth/node'
 
 dotenv.config()
 
@@ -26,6 +29,7 @@ if (!uri) {
 
 const client = new MongoClient(uri)
 let db
+let backendAuth
 
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -42,8 +46,24 @@ async function connectDB() {
 
     await db.command({ ping: 1 })
 
-    // Prevent duplicate active borrows of the same book
-    // by the same user.
+  
+backendAuth = betterAuth({
+  database: mongodbAdapter(db),
+  secret: process.env.BETTER_AUTH_SECRET,
+  baseURL: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
+
+  emailAndPassword: {
+    enabled: true,
+    autoSignIn: false,
+  },
+
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: 60 * 60 * 24 * 7,
+    },
+  },
+})
     await borrows().createIndex(
       { bookId: 1, userEmail: 1 },
       { unique: true, name: 'unique_book_user_borrow' }
@@ -143,22 +163,38 @@ app.get('/', (req, res) => {
 // JWT endpoint
 // IMPORTANT: This endpoint alone does not authenticate a real user.
 // Connect it to your actual authentication provider before production.
-app.post('/jwt', (req, res) => {
-  const { email } = req.body
+// Generate JWT after verifying Better Auth session
+app.post('/jwt', async (req, res) => {
+  try {
+    const session = await backendAuth.api.getSession({
+      headers: fromNodeHeaders(req.headers),
+    })
 
-  if (typeof email !== 'string' || !email.trim()) {
-    return res.status(400).json({
-      message: 'Email is required',
+    if (!session || !session.user) {
+      return res.status(401).json({
+        message: 'Unauthorized: Please login first',
+      })
+    }
+
+    const token = jwt.sign(
+      {
+        email: session.user.email.toLowerCase(),
+        userId: session.user.id,
+      },
+      JWT_SECRET,
+      {
+        expiresIn: '7d',
+      }
+    )
+
+    return res.json({ token })
+  } catch (error) {
+    console.error('JWT generation error:', error)
+
+    return res.status(500).json({
+      message: 'Could not generate JWT',
     })
   }
-
-  const token = jwt.sign(
-    { email: email.trim().toLowerCase() },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  )
-
-  res.json({ token })
 })
 
 // Get all books
